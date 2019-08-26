@@ -1,45 +1,52 @@
+import socket
+
+import attr
 import numpy as np
+from numpy.linalg import norm, matrix_power
 import pandas as pd
 import pygame
 import scipy as sp
-import socket
-import traceback
-from numpy import linalg as LA
 from OpenGL import GL as gl
 from OpenGL.GLU import gluPerspective
 from pykalman import KalmanFilter
+from toolz import curry, compose, pipe, juxt
 
 
 GRAVITATION = 9.81
-PI = np.pi
-RAD2DEG = 180. / PI
-DEG2RAD = PI / 180.
 
 
-def rotation_matrix(axis, theta):
-    """Generate a rotation matrix to Rotate the matrix over the given axis by
-    the given theta (angle)
+# TODO: Scrap / refactor to submodules the simulation code
+# TODO: Refactor the drawing code
+# TODO: Is it possible to manage state better / async?
+# TODO: Improve usability of the on-screen-display
+# TODO: Test using some simulations
 
-    Uses the `Euler-Rodrigues
-    <https://en.wikipedia.org/wiki/Euler%E2%80%93Rodrigues_formula>`_
-    formula for fast rotations.
 
-        :param axis: Three-dim. axis to rotate around of
-        :type axis: np.array
-        :param theta: Rotation angle in radians
+listmap = compose(list, map)
+to_unit = lambda v: v / norm(v)
+
+
+@curry
+def euler_rodrigues(axis, theta):
+    """Rotation matrix to rotate a 3D vector over an axis by an angle
+
+    Uses the `Euler-Rodrigues formula for fast rotations.
+
+    Parameters
+    ----------
+    param axis : Three-dim. axis to rotate around of
+    theta : Rotation angle in radians
+
     """
 
-    axis = np.asarray(axis)
     # No need to rotate if there is no actual rotation
     if not axis.any():
         return np.zeros((3, 3))
 
-    theta = 0.5 * np.asarray(theta)
-
     axis /= np.linalg.norm(axis)
 
-    a = np.cos(theta)
-    b, c, d = - axis * np.sin(theta)
+    a = np.cos(0.5 * theta)
+    b, c, d = - axis * np.sin(0.5 * theta)
     angles = a, b, c, d
     powers = [x * y for x in angles for y in angles]
     aa, ab, ac, ad = powers[0:4]
@@ -47,168 +54,83 @@ def rotation_matrix(axis, theta):
     ca, cb, cc, cd = powers[8:12]
     da, db, dc, dd = powers[12:16]
 
-    return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
-                        [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
-                        [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+    return np.array([
+        [aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+        [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+        [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]
+    ])
 
 
-def axis_angle(vector, axis_ref):
-    """Returns axis-angle representation of a 3D vector.
+rot_angle = compose(
+    np.arccos,
+    lambda x: np.dot(x[0], x[1]),
+    lambda v, a_ref: listmap(to_unit, (v, a_ref))
+)
+rot_ax = compose(to_unit, lambda v, a_ref: -np.cross(a_ref, v))
+is_small_angle = lambda x: (
+    (np.abs(x) <= 1.0e-6) or (np.abs(x - np.pi) <= 1.0e-6)
+)
+# Axis angle representation of a 3D vector
+#
+# Parameters
+# ----------
+# vector : Rotated vector
+# axis_ref : Reference axis
+#
+axis_angle_repr = compose(
+    lambda x: (
+        (x[0], np.array([1., 0., 0.])) if is_small_angle(x[1]) else
+        (x[0], x[1])
+    ),
+    juxt(rot_ax, rot_angle)
+)
 
-        :param vector: Input vector
-        :type vector: np.array
-        :param axis_ref: Reference axis that fixes the plane of rotation
-        :type axis_ref: np.array
-        :return rot_axis: Rotation axis
-        :return rot_angle: Rotation angle
-        :rtype: np.array, float
+
+# Builds the rotation matrix required for rotating given vector to
+# reference axis
+#
+# Parameters
+# ----------
+# vector : Rotated vector
+# axis_ref : Vector along target axis
+#
+build_rotation_matrix = compose(euler_rodrigues, axis_angle_repr)
+
+# PCA
+#
+principal_decomposition = compose(
+    np.linalg.eig,
+    lambda x: np.dot(x, x.T),
+    lambda x: (x - np.mean(x, axis=0)) / np.sqrt(len(x))
+)
+
+
+def evolution_matrix(gyro, dt):
+    """Assembles the evolution matrix for Kalman-filter
+
+    Gravitation vector tracking
+
+    Parameters
+    ----------
+    gyro : Angular velocity in radians
+    dt : time step in seconds
+
     """
-    rot_angle = np.arccos(np.dot(axis_ref, vector) /
-                          LA.norm(axis_ref) / LA.norm(vector))
-    if np.abs(rot_angle) <= 1.0e-6:
-        rot_axis = np.array([1., 0., 0.])
-    elif np.abs(rot_angle - np.pi) <= 1.0e-06:
-        rot_axis = np.array([1., 0., 0.])
-    else:
-        rot_axis = -np.cross(axis_ref, vector)
-        rot_axis /= np.linalg.norm(rot_axis)
-    return rot_axis, rot_angle
+    # cross product operator with gyro
+    A = np.array([
+        [0.0, -gyro[2], gyro[1]],
+        [gyro[2], 0.0, -gyro[0]],
+        [-gyro[1], gyro[0], 0.0]
+    ])
+    I = np.identity(3)
+    speed = norm(gyro)
+    theta = dt * speed
 
-
-def get_rotation_matrix(vector, axis_ref):
-    """Returns the rotation matrix required for rotating the input vector to
-    the reference axis.
-
-        :param vector: Input vector
-        :type vector: np.array
-        :param axis_ref: Vector determining the target axis
-        :type axis_ref: np.array
-        :return: Rotation matrix
-        :rtype: np.array
-    """
-
-    rot_axis, rot_angle = axis_angle(vector, axis_ref)
-
-    return rotation_matrix(rot_axis, rot_angle)
-
-
-def pca_axes(x):
-    """Principal component analysis based on eigenvalue decomposition of
-    covariance matrix. Based on one static input.
-    Could be done dynamically, too.
-
-        :param x: Input data
-        :type x: np.array
-        :return w: Principal components' weights
-        :return axes: Principal axes as columns
-        :rtype: np.array, np.array
-    """
-    x_ = np.mean(x, axis=0)
-    cov = np.dot((x - x_).T, (x - x_)) / len(x)
-    w, axes = LA.eig(cov)
-    return w, axes
-
-
-def pitch_roll_analysis(gravitation, axes):
-    """
-    Estimate pitch and roll angles from gravitation vector
-    observations given the respective axes.
-    :param gravitation: Observations of the gravitation vector.
-    :type gravitation: np.array
-    :param axes: Ship coordinate axes in sensor's xy-plane
-    :type axes: np.array (2x2)
-    :return: pitch: Estimated pitch angles in arrays.
-    :return roll: Estimated roll angles
-    :rtype: np.array, np.array
-    """
-    # rotate gravitation to xy-axes
-    rot_xy = np.array([[axes[0, 0], axes[0, 1], 0.],
-                       [axes[1, 0], axes[1, 1], 0.],
-                       [0., 0., 1.]])
-    g_xy = np.dot(rot_xy.T, gravitation.T).T
-
-    # angles
-    pitch = np.arctan2(g_xy[:, 1], g_xy[:, 2])
-    roll = np.arctan2(-g_xy[:, 0],
-                      np.sqrt(g_xy[:, 1] ** 2 + g_xy[:, 2] ** 2))
-    return pitch, roll
-
-
-def kinematics_sine_series(t, freq, amp):
-    """Simulate kinematics of sinusoidal series form.
-
-        :param t: Time
-        :type t: np.array
-        :param freq: Frequencies in the series
-        :type freq: np.array
-        :param amp: Amplitudes of series terms
-        :type amp: np.array
-        :return x: Position
-        :return v: Velocity
-        :return a: Acceleration
-        :rtype: np.array, np.array, np.array
-    """
-    arg = np.outer(t, freq)
-    x = np.dot(np.sin(arg), amp)
-    v = np.dot(np.cos(arg), freq * amp)
-    a = -1.0 * np.dot(np.sin(arg), freq ** 2 * amp)
-    return x, v, a
-
-
-def accelerometer_swing(lever, x_ang, v_ang, a_ang, a_lin):
-    """Accelerometer on Swing. Calculate two-dimensional accelerometer reading
-    from angular and linear acceleration components.
-
-        :param lever: Position of the accelerometer at zero angle
-        :type lever: np.array
-        :param x_ang: Array of polar angles
-        :type x_ang: np.array
-        :param v_ang: Array of angular velocities
-        :type v_ang: np.array
-        :param a_ang: Array of angular accelerations
-        :type a_ang: np.array
-        :param a_lin: Array of additional translational accelerations
-        :type a_lin: np.array
-        :return: Total acceleration
-        :rtype: np.array complex
-    """
-    z = lever[0] + 1j * lever[1]
-    a_lin = a_lin[:, 0] + 1j * a_lin[:, 1]
-    a_grav = -1j * GRAVITATION * np.exp(1j * x_ang)
-    a_rot = -z * (1j * a_lin + v_ang ** 2)
-    a_total = a_grav + a_rot + a_lin * np.exp(1j * x_ang)
-    return a_total
-
-
-def accelerometer_swing_sine(t, lever, freq_rot, amp_rot, freq_lin, amp_lin):
-    """Simulate measurement of an accelerometer which is attached on a swing
-    that oscillates according to a sinusoidal series. In addition to the
-    signal caused by rotational movement, there is a manually tunable
-    linear accelerometer component.
-
-        :param t: Time
-        :type t: np.array
-        :param lever: Position of the accelerometer at zero angle
-        :type lever: np.array
-        :param freq_rot: Frequencies in the rotational sine series
-        :type freq_rot: np.array
-        :param amp_rot: Amplitudes in the rotational sine series
-        :type amp_rot: np.array
-        :param freq_lin: Frequencies in the translational sine series
-        :type freq_lin: np.array
-        :param amp_lin: Amplitudes in the translational sine series
-        :type amp_lin:np. array
-        :return: Simulated accelerometer measurement
-        :rtype: np.array
-    """
-    # simulate sinusoidal kinematics
-    x_ang, v_ang, a_ang = kinematics_sine_series(t, freq_rot, amp_rot)
-    _, _, a_lin_vert = kinematics_sine_series(t, freq_lin, amp_lin)
-    a_lin = np.array([[0., val] for val in a_lin_vert])  # only vertical
-
-    # simulate accelerometer signal
-    a_meas = accelerometer_swing(lever, x_ang, v_ang, a_ang, a_lin)
-    return a_meas
+    # matrix exponential using Rodrigues rotation formula
+    return (
+        I + np.sin(theta) * - A / speed +
+        (1 - np.cos(theta)) * matrix_power(A, 2) / speed ** 2
+    )
 
 
 class AhrSystem(object):
@@ -380,7 +302,7 @@ class AhrSystem(object):
                     # append lists
                     x_list.append(x)
                     t_list.append(t)
-                    rot_list.append(RAD2DEG * rot_ang * rot_ax)
+                    rot_list.append(np.rad2deg(rot_ang) * rot_ax)
                 except ValueError:
                     print('Invalid data point: ', t, acc, gyr)
 
@@ -456,7 +378,7 @@ class AhrSystem(object):
                 rot_ax = np.cross(np.array([0.0, 0.0, 1.0]),
                                   np.array([x[0], -x[1], x[2]]))
                 rot_ax /= LA.norm(rot_ax)
-                rot_ang = RAD2DEG * np.arccos(x[2] / LA.norm(x))
+                rot_ang = np.rad2deg(np.arccos(x[2] / LA.norm(x)))
 
                 # update graphic
                 if self.config['graphic']:
@@ -466,6 +388,13 @@ class AhrSystem(object):
                 raise
             except:
                 traceback.print_exc()     # prints a lot of stuff on the cml
+
+
+@attr.s(frozen=True)
+class Display():
+    resolution = attr.ib()
+    video_flags = attr.ib()
+
 
 
 class OrientationGraphic(object):
