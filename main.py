@@ -1,15 +1,12 @@
 import socket
+from typing import List, Tuple
 
-import attr
 import numpy as np
-from numpy.linalg import norm, matrix_power
-import pandas as pd
+from numpy import linalg
 import pygame
-import scipy as sp
 from OpenGL import GL as gl
 from OpenGL.GLU import gluPerspective
 from pykalman import KalmanFilter
-from toolz import curry, compose, pipe, juxt
 
 
 GRAVITATION = 9.81
@@ -22,20 +19,19 @@ GRAVITATION = 9.81
 # TODO: Test using some simulations
 
 
-listmap = compose(list, map)
-to_unit = lambda v: v / norm(v)
+def normalize(v: np.ndarray) -> np.ndarray:
+    return v / linalg.norm(v)
 
 
-@curry
-def euler_rodrigues(axis, theta):
+def build_euler_rodrigues(axis: np.ndarray, angle: float):
     """Rotation matrix to rotate a 3D vector over an axis by an angle
 
     Uses the `Euler-Rodrigues formula for fast rotations.
 
     Parameters
     ----------
-    param axis : Three-dim. axis to rotate around of
-    theta : Rotation angle in radians
+    param axis : 3D axis to rotate about
+    angle : Rotation angle in radians
 
     """
 
@@ -43,10 +39,10 @@ def euler_rodrigues(axis, theta):
     if not axis.any():
         return np.zeros((3, 3))
 
-    axis /= np.linalg.norm(axis)
+    axis = normalize(axis)
 
-    a = np.cos(0.5 * theta)
-    b, c, d = - axis * np.sin(0.5 * theta)
+    a = np.cos(0.5 * angle)
+    b, c, d = - axis * np.sin(0.5 * angle)
     angles = a, b, c, d
     powers = [x * y for x in angles for y in angles]
     aa, ab, ac, ad = powers[0:4]
@@ -61,51 +57,38 @@ def euler_rodrigues(axis, theta):
     ])
 
 
-rot_angle = compose(
-    np.arccos,
-    lambda x: np.dot(x[0], x[1]),
-    lambda v, a_ref: listmap(to_unit, (v, a_ref))
-)
-rot_ax = compose(to_unit, lambda v, a_ref: -np.cross(a_ref, v))
-is_small_angle = lambda x: (
-    (np.abs(x) <= 1.0e-6) or (np.abs(x - np.pi) <= 1.0e-6)
-)
-# Axis angle representation of a 3D vector
-#
-# Parameters
-# ----------
-# vector : Rotated vector
-# axis_ref : Reference axis
-#
-axis_angle_repr = compose(
-    lambda x: (
-        (x[0], np.array([1., 0., 0.])) if is_small_angle(x[1]) else
-        (x[0], x[1])
-    ),
-    juxt(rot_ax, rot_angle)
-)
+def represent_axis_angle(v: np.ndarray, aref: np.ndarray) -> Tuple:
+    """Axis angle representation of a 3D vector
+
+    REVIEW Do we want to allow over 180 degree angles? Atm not allowed.
+
+    Parameters
+    ----------
+    v : Rotated vector
+    aref : Reference i.e. zero-angle axis
+
+    """
+
+    def calc_angle(a, b):
+        return np.arccos(
+            np.dot(normalize(a), normalize(b))
+        )
+
+    def calc_axis(a, b):
+        return normalize(-np.cross(b, a))
+
+    def is_small(x):
+        return (np.abs(x) <= 1.0e-6) or (np.abs(x - np.pi) <= 1.0e-6)
+
+    axis = calc_axis(v, aref)
+    angle = calc_angle(v, aref)
+    return (
+        (np.array([1., 0., 0.]), angle) if is_small(angle)
+        else (axis, angle)
+    )
 
 
-# Builds the rotation matrix required for rotating given vector to
-# reference axis
-#
-# Parameters
-# ----------
-# vector : Rotated vector
-# axis_ref : Vector along target axis
-#
-build_rotation_matrix = compose(euler_rodrigues, axis_angle_repr)
-
-# PCA
-#
-principal_decomposition = compose(
-    np.linalg.eig,
-    lambda x: np.dot(x, x.T),
-    lambda x: (x - np.mean(x, axis=0)) / np.sqrt(len(x))
-)
-
-
-def evolution_matrix(gyro, dt):
+def evolution_matrix(gyro: List[float], dt: float) -> np.ndarray:
     """Assembles the evolution matrix for Kalman-filter
 
     Gravitation vector tracking
@@ -123,23 +106,24 @@ def evolution_matrix(gyro, dt):
         [-gyro[1], gyro[0], 0.0]
     ])
     I = np.identity(3)
-    speed = norm(gyro)
+    speed = linalg.norm(gyro)
     theta = dt * speed
 
     # matrix exponential using Rodrigues rotation formula
     return (
         I + np.sin(theta) * - A / speed +
-        (1 - np.cos(theta)) * matrix_power(A, 2) / speed ** 2
+        (1 - np.cos(theta)) * linalg.matrix_power(A, 2) / speed ** 2
     )
 
 
+# FIXME As functions (online_estimate, offline_estimate)
 class AhrSystem(object):
-    """
-    Attitude and heading reference system based on accelerometer and
-    gyroscope measurement on an IMU. The algorithm is based on a standard
-    Kalman filter formulation (S. Särkkä 2016). The observation model is
-    the mere accelerometer reading. Evolution model is based on a differential
-    equation that relates angular velocity and gravity.
+    """Attitude and heading reference system
+
+    Based on accelerometer and gyroscope measurement on an IMU. The algorithm is
+    based on a standard Kalman filter formulation (S. Särkkä 2016). The
+    observation model is the mere accelerometer reading. Evolution model is
+    based on a differential equation that relates angular velocity and gravity.
 
     :Example:
 
@@ -231,21 +215,20 @@ class AhrSystem(object):
             [angular_velo[2], 0.0, -angular_velo[0]],
             [-angular_velo[1], angular_velo[0], 0.0]
         ])
-        angular_velo_norm = LA.norm(angular_velo)
+        angular_velo_norm = linalg.norm(angular_velo)
         theta = time_step * angular_velo_norm
 
         # matrix exponential using Rodrigues rotation formula
         evolution_matrix = np.identity(3) + \
                            np.sin(theta) * -cross_mat / angular_velo_norm + \
                            (1 - np.cos(theta)) * \
-                           LA.matrix_power(cross_mat, 2) / \
+                           linalg.matrix_power(cross_mat, 2) / \
                            angular_velo_norm ** 2
         return evolution_matrix
 
     def offline_estimate(self):
-        """
-        Offline attitude estimation method using Kalman-filtering
-        :return:
+        """Offline attitude estimate
+
         """
 
         # initialize Kalman-filter
@@ -257,6 +240,8 @@ class AhrSystem(object):
         P = self.kf.initial_state_covariance
         first = True
 
+        # FIXME No no no data reader
+        # FIXME Use reduce and not for loop
         for chunk in self.data_reader:
             # keep count of progress
             count += 1
@@ -311,12 +296,12 @@ class AhrSystem(object):
         self.rotation_array = np.array(rot_list)
 
     def online_estimate(self):
-        """
-        Online attitude estimation method using Kalman-filtering. Optional
-        visualization via PyOpenGL. Sensor data transmission is carried out
-        through UDP. Currently compatible with the Android operating system
+        """Online attitude estimation method using Kalman-filtering
+
+        Optional visualization via PyOpenGL. Sensor data transmission is carried
+        out through UDP. Currently compatible with the Android operating system
         with suitable data transmission software (e.g. "Wireless IMU").
-        :return:
+
         """
         # initialize networking interface
         host = ''
@@ -377,8 +362,8 @@ class AhrSystem(object):
                 # rotational quantities
                 rot_ax = np.cross(np.array([0.0, 0.0, 1.0]),
                                   np.array([x[0], -x[1], x[2]]))
-                rot_ax /= LA.norm(rot_ax)
-                rot_ang = np.rad2deg(np.arccos(x[2] / LA.norm(x)))
+                rot_ax /= linalg.norm(rot_ax)
+                rot_ang = np.rad2deg(np.arccos(x[2] / linalg.norm(x)))
 
                 # update graphic
                 if self.config['graphic']:
@@ -390,15 +375,15 @@ class AhrSystem(object):
                 traceback.print_exc()     # prints a lot of stuff on the cml
 
 
-@attr.s(frozen=True)
 class Display():
-    resolution = attr.ib()
-    video_flags = attr.ib()
 
+    def __init__(resolution, video_flags):
+        return
 
 
 class OrientationGraphic(object):
-    """An object for visualization of imu orientation in global coordinates
+    """Visualization of IMU orientation in global coordinates
+
     """
 
     DEFAULTS = {
@@ -433,6 +418,7 @@ class OrientationGraphic(object):
 
     def _resize(self):
         """Resize screen and define perspective
+
         """
         gl.glViewport(0,
                       0,
@@ -450,7 +436,9 @@ class OrientationGraphic(object):
 
     def _draw_text(self, position, text_string):
         """Draw text on the on-screen display.
+
         """
+
         font = pygame.font.SysFont("Courier", 18, True)
         text_surface = font.render(text_string, True, (255, 255, 255, 255),
                                    (0, 0, 0, 255))
@@ -464,6 +452,7 @@ class OrientationGraphic(object):
 
     def _draw_cuboid(self):
         """Draw a hexahedron on the on-screen display.
+
         """
         gl.glBegin(gl.GL_QUADS)
         gl.glColor3f(0.0, 1.0, 0.0)
@@ -540,84 +529,6 @@ class OrientationGraphic(object):
             return False
         else:
             return True
-
-
-def tilt_transition_matrix(state, dt):
-    """Wrap this into inline transition function in Unscented Kalman filter.
-
-        :param state: State variable for tilt model
-        :type state: dict with keys 'x_ang', 'v_ang', 'freq_osc', 'lever' and
-        float values
-        :param dt: Time step
-        :type dt: float
-        :return: Transition matrix
-        :rtype: np.array
-    """
-    n_state = sum(len(state[key]) for key in state)
-    n_ang = state['x_ang'].size
-
-    # form exponential matrix
-    exponent = np.zeros((n_state, n_state))
-    exponent[:n_ang, n_ang:2 * n_ang] = np.identity(n_ang)
-    exponent[n_ang:2 * n_ang, :n_ang] = \
-        -np.diag(state['freq_osc'] ** 2)
-    transition_matrix = sp.linalg.expm(exponent * dt)
-
-    return transition_matrix
-
-
-def tilt_observation_function(state):
-    """Wrap this into inline observation function in Unscented Kalman filter.
-
-    Enables using a nonlinear term involving the angular frequency
-
-        :param state: State variable for tilt model
-        :type state: dict with keys 'x_ang', 'v_ang', 'freq_osc', 'lever' and
-        float values
-        :return: Observation vector
-        :rtype: np.array
-    """
-    x_ang = state['x_ang']
-    v_ang = state['v_ang']
-    freq_osc = state['freq_osc']
-    lever = state['lever']
-
-    offset = np.array([0., GRAVITATION])
-    lin0 = np.sum((lever[1] * freq_osc ** 2 - GRAVITATION) * x_ang) + \
-           lever[0] * np.sum(v_ang) ** 2
-    lin1 = np.sum(-lever[0] * freq_osc ** 2 * x_ang) + \
-           lever[1] * np.sum(v_ang) ** 2
-    return np.array([lin0, lin1]) + offset
-
-
-def tilt_observation_transformation(state):
-    """Build observation matrix and offset using the simplified observation
-    model.
-
-    The matrix itself is a non-linear function of the full state but
-    if frequency and lever are fixed, then the model is affine.
-
-        :param state: State variable for tilt model
-        :type state: dict with keys 'x_ang', 'v_ang', 'freq_osc', 'lever' and
-        float values
-        :return:
-    """
-    n_state = sum(len(state[key]) for key in state)
-    n_angle = state['angle'].size
-    lever = state['lever']
-    freq_osc = state['freq_osc']
-
-    offset = np.array([0., GRAVITATION])
-
-    mat0 = np.zeros((2, n_state))
-    mat0[0, :n_angle] = lever[0] * freq_osc
-    mat0[1, :n_angle] = -lever[1] * freq_osc
-    mat1 = np.zeros((2, n_state))
-    mat1[:, :n_angle] = GRAVITATION
-
-    # form the full matrix
-    mat = mat0 - mat1
-    return mat, offset
 
 
 if __name__ == '__main__':
