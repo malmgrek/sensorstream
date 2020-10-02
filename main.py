@@ -298,6 +298,22 @@ class AhrSystem(object):
     def online_estimate(self):
         """Online attitude estimation method using Kalman-filtering
 
+        SensorStreamer
+        --------------
+        1. Find out phone IP (e.g. from settings)
+        2. Define data packet and TCP Server in the app
+        3. Send data
+
+        Reveiving using
+
+        def socket2(port=3400):
+            ip = "192.168.10.45"  # <-- mobile phone IP
+            buffer = 1024
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((ip, port))
+            # s.close()
+            return s
+
         Optional visualization via PyOpenGL. Sensor data transmission is carried
         out through UDP. Currently compatible with the Android operating system
         with suitable data transmission software (e.g. "Wireless IMU").
