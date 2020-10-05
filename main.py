@@ -12,11 +12,9 @@ from pykalman import KalmanFilter
 GRAVITATION = 9.81
 
 
-# TODO: Scrap / refactor to submodules the simulation code
-# TODO: Refactor the drawing code
+# TODO: Scrap / refactor to submodules the simulation code from Git history
 # TODO: Is it possible to manage state better / async?
-# TODO: Improve usability of the on-screen-display
-# TODO: Test using some simulations
+# TODO: Record a test data set for demonstrating
 
 
 def normalize(v: np.ndarray) -> np.ndarray:
@@ -391,10 +389,20 @@ class AhrSystem(object):
                 traceback.print_exc()     # prints a lot of stuff on the cml
 
 
-class Display():
-
-    def __init__(resolution, video_flags):
-        return
+def start_display(
+        resolution=(640, 480),
+        video_flags=(pygame.OPENGL | pygame.DOUBLEBUF)
+):
+    pygame.init()
+    screen = pygame.display.set_mode(resolution, video_flags)
+    pygame.display.set_caption("Press Esc to quit")
+    while 1:
+        event = pygame.event.wait()
+        if event.type == pygame.QUIT or (
+                event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        ):
+            pygame.quit()
+            exit()
 
 
 class OrientationGraphic(object):
@@ -548,11 +556,11 @@ class OrientationGraphic(object):
 
 
 if __name__ == '__main__':
-    A = AhrSystem(path_to_data=None,
-                  graphic=True,
-                  display_resolution =(3*640, 2*480),
-                  chunksize=4000,
-                  qc=1.0e-02,
-                  sigma=1.0e-01)
-    A.online_estimate()
-
+    # A = AhrSystem(path_to_data=None,
+    #               graphic=True,
+    #               display_resolution =(3*640, 2*480),
+    #               chunksize=4000,
+    #               qc=1.0e-02,
+    #               sigma=1.0e-01)
+    # A.online_estimate()
+    start_display()
