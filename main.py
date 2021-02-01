@@ -1,5 +1,9 @@
+import json
+import logging
 import socket
-from typing import List, Tuple
+from sys import exit
+from time import sleep
+from typing import Callable, List, Tuple
 
 import numpy as np
 from numpy import linalg
@@ -302,7 +306,7 @@ class AhrSystem(object):
         2. Define data packet and TCP Server in the app
         3. Send data
 
-        Reveiving using
+        Create receiver connection
 
         def socket2(port=3400):
             ip = "192.168.10.45"  # <-- mobile phone IP
@@ -396,13 +400,225 @@ def start_display(
     pygame.init()
     screen = pygame.display.set_mode(resolution, video_flags)
     pygame.display.set_caption("Press Esc to quit")
-    while 1:
-        event = pygame.event.wait()
+    init_opengl(resolution)
+    while True:
+        event = pygame.event.poll()
+        # TODO: Put wrapping here #########
+        draw_cuboid(np.random.randint(90), [1, 0, 0])
+        # sleep(0.01)
+        pygame.display.flip()
+        ###################################
         if event.type == pygame.QUIT or (
                 event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
         ):
             pygame.quit()
-            exit()
+            return True
+    pygame.quit()
+
+
+def init_opengl(resolution):
+
+    # Resize
+    gl.glViewport(0, 0, resolution[0], resolution[1])
+    gl.glMatrixMode(gl.GL_PROJECTION)
+    gl.glLoadIdentity()
+    gluPerspective(45, resolution[0] / resolution[1], 0.1, 100.0)
+    gl.glMatrixMode(gl.GL_MODELVIEW)
+    gl.glLoadIdentity()
+
+    # Colors and depth buffer
+    gl.glShadeModel(gl.GL_SMOOTH)
+    gl.glClearColor(0.0, 0.0, 0.0, 0.0)
+    gl.glClearDepth(1.0)
+    gl.glEnable(gl.GL_DEPTH_TEST)
+    gl.glDepthFunc(gl.GL_LEQUAL)
+    gl.glHint(gl.GL_PERSPECTIVE_CORRECTION_HINT, gl.GL_NICEST)
+
+    return
+
+
+def draw_cuboid(angle: float, axis: List):
+    """Draw OpenGL cuboid
+
+    """
+
+    gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+    gl.glLoadIdentity()
+    gl.glTranslatef(0.0, 0.0, -7.0)
+
+    # # Write some text
+    # # FIXME: Needs the pygame thingy
+    # text = (
+    #     "Inclination: {:.2f} deg., Axis: [{:.2f}, {:.2f}, {:.2f}]".format(
+    #         angle, *axis
+    #     )
+    # )
+    # gl.glRasterPos3d(-2, 1.5, 2.5)
+    # gl.glDrawPixels(3, 3, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, text)
+
+    # NOTE: y and z swapped places
+    gl.glRotatef(angle, axis[0], axis[2], axis[1])
+
+    gl.glBegin(gl.GL_QUADS)
+
+    gl.glColor3f(0.0, 1.0, 0.0)
+    gl.glVertex3f(1.0, 0.2, -1.0)
+    gl.glVertex3f(-1.0, 0.2, -1.0)
+    gl.glVertex3f(-1.0, 0.2, 1.0)
+    gl.glVertex3f(1.0, 0.2, 1.0)
+
+    gl.glColor3f(1.0, 0.5, 0.0)
+    gl.glVertex3f(1.0, -0.2, 1.0)
+    gl.glVertex3f(-1.0, -0.2, 1.0)
+    gl.glVertex3f(-1.0, -0.2, -1.0)
+    gl.glVertex3f(1.0, -0.2, -1.0)
+
+    gl.glColor3f(1.0, 0.0, 0.0)
+    gl.glVertex3f(1.0, 0.2, 1.0)
+    gl.glVertex3f(-1.0, 0.2, 1.0)
+    gl.glVertex3f(-1.0, -0.2, 1.0)
+    gl.glVertex3f(1.0, -0.2, 1.0)
+
+    gl.glColor3f(1.0, 1.0, 0.0)
+    gl.glVertex3f(1.0, -0.2, -1.0)
+    gl.glVertex3f(-1.0, -0.2, -1.0)
+    gl.glVertex3f(-1.0, 0.2, -1.0)
+    gl.glVertex3f(1.0, 0.2, -1.0)
+
+    gl.glColor3f(0.0, 0.0, 1.0)
+    gl.glVertex3f(-1.0, 0.2, 1.0)
+    gl.glVertex3f(-1.0, 0.2, -1.0)
+    gl.glVertex3f(-1.0, -0.2, -1.0)
+    gl.glVertex3f(-1.0, -0.2, 1.0)
+
+    gl.glColor3f(1.0, 0.0, 1.0)
+    gl.glVertex3f(1.0, 0.2, -1.0)
+    gl.glVertex3f(1.0, 0.2, 1.0)
+    gl.glVertex3f(1.0, -0.2, 1.0)
+    gl.glVertex3f(1.0, -0.2, -1.0)
+
+    gl.glEnd()
+
+    return
+
+
+def create_socket_processor(
+        # Similar to the function in reduce, can be
+        # e.g. Kalman filter
+        reduct: Callable,
+        init: Callable,
+        display: bool=False
+):
+    """Create different streaming data processing methods
+
+    Optional support for on-screen visualization.
+
+    """
+
+    def run(
+            host: str,
+            port: int,
+            buffer: int,
+            terminate: Callable=lambda x: False,
+            resolution=(640, 480),
+            video_flags=(pygame.OPENGL | pygame.DOUBLEBUF)
+    ):
+
+        if display:
+            pygame.init()
+            pygame.display.set_mode(resolution, video_flags)
+            pygame.display.set_caption("Press Ctrl-C to quit")
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((host, port))
+            # If you're not enabling the display, then init should ignore
+            # those arguments
+            cum = init(resolution=resolution)
+            while not terminate(cum):
+                if display:
+                    event = pygame.event.poll()
+                    if event.type == pygame.QUIT or (
+                            event.type == pygame.KEYDOWN and
+                            event.key == pygame.K_ESCAPE
+                    ):
+                        pygame.quit()
+                        return cum
+                msg = s.recv(buffer)
+                cum = reduct(cum, msg)
+        return cum
+
+    return run
+
+
+def simple_printer(*args, **kwargs):
+    # simple_print(
+    #     host="192.168.10.45",
+    #     port=3400,
+    #     buffer=2*8192,
+    # )
+    return create_socket_processor(
+        reduct=lambda cum, msg: print(msg.decode().split("\n")[-2]),
+        init=lambda **kwargs: None
+    )(*args, **kwargs)
+
+
+def naive_visualizer(*args, **kwargs):
+
+    def reduct(cum, msg):
+        try:
+            y = np.array(
+                json.loads(msg.decode().split("\n")[-2])
+                .get("accelerometer")
+                .get("value")
+            )
+        except json.JSONDecodeError as err:
+            logging.warning(err)
+            return (None, None)
+        axis = np.cross(
+            [0, 0, 1],
+            [y[0], -y[1], y[2]]
+        )
+        axis = axis / np.linalg.norm(axis)
+        angle = np.rad2deg(np.arccos(y[2] / np.linalg.norm(y)))
+        sleep(0.05)
+        draw_cuboid(angle, axis)
+        pygame.display.flip()
+        return (angle, axis)
+
+    def init(resolution, **kwargs):
+        init_opengl(resolution)
+        return []
+
+    return create_socket_processor(
+        reduct=reduct,
+        init=init,
+        display=True
+    )(*args, **kwargs)
+
+
+#
+# - Where to initialize OpenGL stuff? Another wrapper?
+#
+# - Support: online_estimate without drawing
+# - Support: Swapping estimation method (naive vs. other)
+# - Support: Changing to different OpenGL-based drawing method
+#            in the future (e.g. rotation)
+#
+# Just draws a cuboid while exited by user:
+# with_display(draw_cuboid())
+#
+# Run
+# with_display(online_estimate())
+#
+# FIXME: Blocking event for pygame event listener
+
+
+def run2():
+    # This works
+    osd = OrientationGraphic()
+    osd.draw_orientation(45, np.array([0, 1, 1]))
+
+
 
 
 class OrientationGraphic(object):
@@ -546,13 +762,20 @@ class OrientationGraphic(object):
         pygame.display.flip()
 
         # interactions for quitting
-        event = pygame.event.poll()
-        if event.type == pygame.QUIT or \
-                (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
-            pygame.quit()
-            return False
-        else:
-            return True
+        while 1:
+            event = pygame.event.wait()
+            if event.type == pygame.QUIT or (
+                    event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+            ):
+                pygame.quit()
+                exit()
+        # event = pygame.event.poll()
+        # if event.type == pygame.QUIT or \
+        #         (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+        #     pygame.quit()
+        #     return False
+        # else:
+        #     return True
 
 
 if __name__ == '__main__':
