@@ -71,7 +71,8 @@ def draw_cuboid(angle: float, axis: List):
     gl.glLoadIdentity()
     gl.glTranslatef(0.0, 0.0, -7.0)
 
-    # # Write some text
+    # Write some text to the display
+    # TODO/FIXME: Axis interpretation?
     font = pygame.font.SysFont("Courier", 18, True)
     text = (
         "Inclination: {:.2f} deg., Axis: [{:.2f}, {:.2f}, {:.2f}]".format(

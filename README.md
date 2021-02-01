@@ -1,5 +1,7 @@
 # Visualize mobile phone sensor data with Python
 
+![gif-animation](./images/animation.gif)
+
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
 **Table of Contents**
 
