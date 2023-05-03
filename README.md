@@ -5,12 +5,12 @@
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
 **Table of Contents**
 
-- [Summary](#summary)
+- [Purpose](#purpose)
 - [Introduction](#introduction)
 - [Instructions](#instructions)
     - [Requirements](#requirements)
-        - [Client side (laptop computer)](#client-side-laptop-computer)
-        - [Server side (mobile phone)](#server-side-mobile-phone)
+        - [Client (laptop computer)](#client-side-laptop-computer)
+        - [Server (mobile phone)](#server-side-mobile-phone)
 - [References](#references)
 
 <!-- markdown-toc end -->
@@ -40,7 +40,7 @@ Visualization using OpenGL and Pygame.
 
 ### Requirements
 
-#### Client side (laptop computer)
+#### Client (laptop computer)
 
 Python programming environment can be installed with
 
@@ -51,7 +51,7 @@ pip install -r requirements.txt
 **NOTE:** PyOpenGL requires typically an OpenGL utility toolkit, e.g.
 `freeglut3-dev` on Ubuntu Linux.
 
-#### Server side (mobile phone)
+#### Server (mobile phone)
 
 Currently tested only with the Android app
 [SensorStreamer](https://github.com/yaqwsx/SensorStreamer "SensorStreamer") that sets up a mobile server for sending sensor data.
@@ -63,8 +63,14 @@ Currently tested only with the Android app
    - An option is to activate a "Mobile hotspot" local network and connect
      the laptop to the network
 5. Start a stream in the app with `Lowest possible period`
-6. Run `python sensorstream.py --host=MY_IP_ADDRESS --port=3400 --buffer=8192
-   --method=naive`
+6. Launch visualization program:
+
+``` shell
+python sensorstream.py --host=<insert_your_phone_ip_address> \
+                       --port=3400 \
+                       --buffer=8192 \
+                       --method=naive
+```
    
 ## References
 
